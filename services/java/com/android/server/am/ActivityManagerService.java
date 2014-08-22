@@ -4047,7 +4047,7 @@ public final class ActivityManagerService extends ActivityManagerNative
             if (knownApp != null && knownApp.thread == null) {
                 mPidsSelfLocked.remove(pid);
                 gone = true;
-            }        
+            }
         }
         
         if (gone) {
@@ -4437,7 +4437,6 @@ public final class ActivityManagerService extends ActivityManagerNative
             enableScreen = !mBooted;
             mBooted = true;
         }
-        
         if (booting) {
             finishBooting();
         }
@@ -4445,6 +4444,7 @@ public final class ActivityManagerService extends ActivityManagerNative
         if (enableScreen) {
             enableScreenAfterBoot();
         }
+        SystemProperties.set("dev.__bootcomplete", "1");
     }
 
     public final void activityResumed(IBinder token) {

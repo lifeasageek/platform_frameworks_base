@@ -1454,11 +1454,7 @@ class AppWidgetServiceImpl {
             packageUid = getUidForPackage(packageName);
         } catch (PackageManager.NameNotFoundException ex) {
             throw new IllegalArgumentException("packageName and uid don't match packageName="
-                    + packageName);
-        }
-        if (!UserHandle.isSameApp(callingUid, packageUid)) {
-            throw new IllegalArgumentException("packageName and uid don't match packageName="
-                    + packageName);
+                                               + packageName);
         }
         return callingUid;
     }

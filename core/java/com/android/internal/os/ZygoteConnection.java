@@ -21,6 +21,7 @@ import android.net.LocalSocket;
 import android.os.Process;
 import android.os.SELinux;
 import android.os.SystemProperties;
+import android.os.SystemClock;
 import android.util.Log;
 
 import dalvik.system.PathClassLoader;
@@ -46,6 +47,9 @@ import libcore.io.Libcore;
  */
 class ZygoteConnection {
     private static final String TAG = "Zygote";
+    public static boolean isMorulaModel = false;
+    public static boolean isWrapModel = false;
+    public static boolean isZygoteModel = false;
 
     /** a prototype instance for a future List.toArray() */
     private static final int[][] intArray2d = new int[0][0];
@@ -209,6 +213,13 @@ class ZygoteConnection {
 
         try {
             parsedArgs = new Arguments(args);
+            checkProcessCreateModel();
+            if (parsedArgs.prepareInstance) {
+                // Prepare the instance then return.
+                if (isMorulaModel)
+                    MorulaInit.createMorulaInitInstance();
+                return true;
+            }
 
             applyUidSecurityPolicy(parsedArgs, peer, peerSecurityContext);
             applyRlimitSecurityPolicy(parsedArgs, peer, peerSecurityContext);
@@ -218,6 +229,7 @@ class ZygoteConnection {
 
             applyDebuggerSystemProperty(parsedArgs);
             applyInvokeWithSystemProperty(parsedArgs);
+            applyWrapSpecificOption(parsedArgs);
 
             int[][] rlimits = null;
 
@@ -225,16 +237,41 @@ class ZygoteConnection {
                 rlimits = parsedArgs.rlimits.toArray(intArray2d);
             }
 
-            if (parsedArgs.runtimeInit && parsedArgs.invokeWith != null) {
+            if (parsedArgs.runtimeInit
+                && (parsedArgs.invokeWith != null || isMorulaModel)) {
                 FileDescriptor[] pipeFds = Libcore.os.pipe();
                 childPipeFd = pipeFds[1];
                 serverPipeFd = pipeFds[0];
                 ZygoteInit.setCloseOnExec(serverPipeFd, true);
             }
 
-            pid = Zygote.forkAndSpecialize(parsedArgs.uid, parsedArgs.gid, parsedArgs.gids,
-                    parsedArgs.debugFlags, rlimits, parsedArgs.mountExternal, parsedArgs.seInfo,
-                    parsedArgs.niceName);
+            if (parsedArgs.runtimeInit && isMorulaModel
+                && (!checkNativeOpt() || isNativeApp(parsedArgs.niceName))) {
+                // Morula model.
+                pid = MorulaInit.getCurrentInstance().pid;
+
+                // Send process specialize information using pipeline.
+                MorulaInit.sendSpecializeInfo(childPipeFd,
+                                              parsedArgs.targetSdkVersion,
+                                              parsedArgs.uid,
+                                              parsedArgs.gid,
+                                              parsedArgs.gids,
+                                              parsedArgs.debugFlags,
+                                              rlimits,
+                                              parsedArgs.mountExternal,
+                                              parsedArgs.seInfo,
+                                              parsedArgs.niceName);
+            } else {
+                // Zygote or Wrap model.
+                pid = Zygote.forkAndSpecialize(parsedArgs.uid,
+                                               parsedArgs.gid,
+                                               parsedArgs.gids,
+                                               parsedArgs.debugFlags,
+                                               rlimits,
+                                               parsedArgs.mountExternal,
+                                               parsedArgs.seInfo,
+                                               parsedArgs.niceName);
+            }
         } catch (IOException ex) {
             logAndPrintError(newStderr, "Exception creating pipe", ex);
         } catch (ErrnoException ex) {
@@ -252,7 +289,6 @@ class ZygoteConnection {
                 IoUtils.closeQuietly(serverPipeFd);
                 serverPipeFd = null;
                 handleChildProc(parsedArgs, descriptors, childPipeFd, newStderr);
-
                 // should never get here, the child is expected to either
                 // throw ZygoteInit.MethodAndArgsCaller or exec().
                 return true;
@@ -370,6 +406,9 @@ class ZygoteConnection {
         /** from --invoke-with */
         String invokeWith;
 
+        /** from --prepare-instance */
+        boolean prepareInstance;
+
         /**
          * Any args after and including the first non-option arg
          * (or after a '--')
@@ -403,6 +442,8 @@ class ZygoteConnection {
                 if (arg.equals("--")) {
                     curArg++;
                     break;
+                } else if (arg.startsWith("--prepare-instance")) {
+                    prepareInstance = true;
                 } else if (arg.startsWith("--setuid=")) {
                     if (uidSpecified) {
                         throw new IllegalArgumentException(
@@ -879,6 +920,55 @@ class ZygoteConnection {
         }
     }
 
+    // Check if native app optimization is specifiecd.
+    public static boolean checkNativeOpt() {
+        String nativeOpt = SystemProperties.get("NATIVE_OPT");
+        if (nativeOpt != null && nativeOpt.equals("yes"))
+            return true;
+        return false;
+    }
+
+    // Check if the specific package needs to be optimized.
+    // Searching for nativeopt.<pkg name> in properties.
+    public static boolean isNativeApp(String nicename) {
+        if (nicename != null) {
+            String propName = "nativeopt." +
+              String.format("%08x", nicename.hashCode());
+
+            if (propName.length() > 31) // Truncate if the name is too long.
+                propName = propName.substring(0, 31);
+
+            String v = SystemProperties.get(propName);
+            if (v != null && v.equals("yes"))
+                return true;
+        }
+        return false;
+    }
+
+    public static void checkProcessCreateModel() {
+        String model = SystemProperties.get("PROCESS_CREATE_MODEL");
+
+        // FIXME : No need to always reset?
+        isZygoteModel = false;
+        isWrapModel = false;
+        isMorulaModel = false;
+
+        if (model.equals("zygote"))
+            isZygoteModel = true;
+        else if (model.equals("wrap"))
+            isWrapModel = true;
+        else if (model.equals("morula"))
+            isMorulaModel = true;
+        else {
+            Log.e(TAG, "Failed to parse the PROCESS_CREATE_MODEL property");
+        }
+    }
+
+    public static void applyWrapSpecificOption(Arguments args) {
+        if (isWrapModel)
+            args.invokeWith = "exec";
+    }
+
     /**
      * Handles post-fork setup of child proc, closing sockets as appropriate,
      * reopen stdio as appropriate, and ultimately throwing MethodAndArgsCaller
@@ -934,7 +1024,8 @@ class ZygoteConnection {
         }
 
         if (parsedArgs.runtimeInit) {
-            if (parsedArgs.invokeWith != null) {
+            if (parsedArgs.invokeWith != null
+                && (!checkNativeOpt() || isNativeApp(parsedArgs.niceName)) ) {
                 WrapperInit.execApplication(parsedArgs.invokeWith,
                         parsedArgs.niceName, parsedArgs.targetSdkVersion,
                         pipeFd, parsedArgs.remainingArgs);
@@ -1003,7 +1094,10 @@ class ZygoteConnection {
         }
 
         boolean usingWrapper = false;
-        if (pipeFd != null && pid > 0) {
+        if (isMorulaModel)
+            usingWrapper = true;
+
+        if (pipeFd != null && pid > 0 && !isMorulaModel) {
             DataInputStream is = new DataInputStream(new FileInputStream(pipeFd));
             int innerPid = -1;
             try {

@@ -26,6 +26,7 @@ import android.graphics.drawable.Drawable;
 import android.net.LocalServerSocket;
 import android.os.Debug;
 import android.os.Process;
+import android.os.SystemProperties;
 import android.os.SystemClock;
 import android.util.EventLog;
 import android.util.Log;
@@ -231,7 +232,10 @@ public class ZygoteInit {
     }
 
     static void preload() {
-        preloadClasses();
+        String onDemandPreload = SystemProperties.get("ON_DEMAND_PRELOAD");
+        if (onDemandPreload == null || onDemandPreload.length() == 0) {
+            preloadClasses();
+        }
         preloadResources();
     }
 
@@ -271,8 +275,8 @@ public class ZygoteInit {
                 BufferedReader br
                     = new BufferedReader(new InputStreamReader(is), 256);
 
-                int count = 0;
                 String line;
+                String dumpPreloadTs = SystemProperties.get("DUMP_PRELOAD_TS");
                 while ((line = br.readLine()) != null) {
                     // Skip comments and blank lines.
                     line = line.trim();
@@ -281,10 +285,21 @@ public class ZygoteInit {
                     }
 
                     try {
-                        if (false) {
-                            Log.v(TAG, "Preloading " + line + "...");
+                        if (dumpPreloadTs != null &&
+                            dumpPreloadTs.length() != 0) {
+                            long t1 = SystemClock.uptimeMillis();
+                            int m1 = Debug.getGlobalAllocSize();
+
+                            Class.forName(line);
+
+                            long t2 = SystemClock.uptimeMillis();
+                            int m2 = Debug.getGlobalAllocSize();
+                            Log.i(TAG, "Preloading " + line +
+                                  "[" + (m2-m1) + "," + (t2-t1) + "]");
+                        } else {
+                            Class.forName(line);
                         }
-                        Class.forName(line);
+
                         if (Debug.getGlobalAllocSize() > PRELOAD_GC_THRESHOLD) {
                             if (false) {
                                 Log.v(TAG,
@@ -294,7 +309,6 @@ public class ZygoteInit {
                             runtime.runFinalizationSync();
                             Debug.resetGlobalAllocSize();
                         }
-                        count++;
                     } catch (ClassNotFoundException e) {
                         Log.w(TAG, "Class not found for preloading: " + line);
                     } catch (Throwable t) {
@@ -308,9 +322,6 @@ public class ZygoteInit {
                         throw new RuntimeException(t);
                     }
                 }
-
-                Log.i(TAG, "...preloaded " + count + " classes in "
-                        + (SystemClock.uptimeMillis()-startTime) + "ms.");
             } catch (IOException e) {
                 Log.e(TAG, "Error reading " + PRELOADED_CLASSES + ".", e);
             } finally {
@@ -346,21 +357,14 @@ public class ZygoteInit {
             if (PRELOAD_RESOURCES) {
                 Log.i(TAG, "Preloading resources...");
 
-                long startTime = SystemClock.uptimeMillis();
                 TypedArray ar = mResources.obtainTypedArray(
                         com.android.internal.R.array.preloaded_drawables);
                 int N = preloadDrawables(runtime, ar);
                 ar.recycle();
-                Log.i(TAG, "...preloaded " + N + " resources in "
-                        + (SystemClock.uptimeMillis()-startTime) + "ms.");
-
-                startTime = SystemClock.uptimeMillis();
                 ar = mResources.obtainTypedArray(
                         com.android.internal.R.array.preloaded_color_state_lists);
                 N = preloadColorStateLists(runtime, ar);
                 ar.recycle();
-                Log.i(TAG, "...preloaded " + N + " resources in "
-                        + (SystemClock.uptimeMillis()-startTime) + "ms.");
             }
             mResources.finishPreloading();
         } catch (RuntimeException e) {
@@ -639,6 +643,9 @@ public class ZygoteInit {
                 loopCount--;
             }
 
+            ZygoteConnection.checkProcessCreateModel();
+            if (ZygoteConnection.isMorulaModel)
+                MorulaInit.ensureMorulaInitInstance();
 
             try {
                 fdArray = fds.toArray(fdArray);
