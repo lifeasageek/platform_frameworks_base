@@ -1,3 +1,20 @@
+/*
+ * Copyright (C) 2014 Byoungyoung Lee
+ * Copyright (C) 2007 The Android Open Source Project
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *      http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package com.android.internal.os;
 
 import android.os.Process;
@@ -57,13 +74,13 @@ public class MorulaInit {
             } else {
                 os.writeInt(0);
             }
-            
+
             os.writeInt(debugFlags);
             os.writeInt(mountExternal);
             os.writeUTF(niceName);
             os.close();
             IoUtils.closeQuietly(writePipeFd);
-            
+
             deleteInstance();
         } catch (IOException ex) {
             Slog.e(TAG, "Failed to write specialize info using pipe.", ex);
@@ -72,7 +89,7 @@ public class MorulaInit {
 
     // Will be executed from child.
     public static int recvSpecializeInfoAndApply(int fdNum) {
-        int childPipeFdNum = 0; 
+        int childPipeFdNum = 0;
         int uid = 0;
         int gid = 0;
         int gids_len = 0;
@@ -94,7 +111,7 @@ public class MorulaInit {
             gid = is.readInt();
             gids_len = is.readInt();
             gids = new int[gids_len];
-            
+
             for (int i=0; i<gids_len; i++)
                 gids[i] = is.readInt();
 
@@ -114,14 +131,14 @@ public class MorulaInit {
     public static void main(String[] args) {
         int fdNum;
         int targetSdkVersion;
-        
+
         // Mimic Zygote preloading.
         ZygoteInit.preload();
-            
+
         // Parse the arguments.
         fdNum = Integer.parseInt(args[0], 10);
         targetSdkVersion = recvSpecializeInfoAndApply(fdNum);
-        
+
         try {
             // Launch the application.
             String[] runtimeArgs = new String[args.length - 1];
@@ -138,12 +155,12 @@ public class MorulaInit {
         // TODO : assertion on the instance size.
         Instances.remove(0);
     }
-    
+
     public static InstanceInfo getCurrentInstance() {
         // TODO : assertion on the instance size.
         return Instances.get(0);
     }
-  
+
     public static void ensureMorulaInitInstance() {
         if (Instances.size() >= MIN_PREPARE_INSTANCE)
             return;
@@ -153,7 +170,7 @@ public class MorulaInit {
     public static int createMorulaInitInstance() {
         FileDescriptor readPipeFd = null;
         FileDescriptor writePipeFd = null;
-        
+
         if (Instances.size() >= MAX_PREPARE_INSTANCE)
             return -1;
 
@@ -183,7 +200,7 @@ public class MorulaInit {
         // Parent case.
         return pid;
     }
-    
+
     private static void execApplication(FileDescriptor pipeFd) {
         // This is emulating startViaZygote().
         StringBuilder command = new StringBuilder("exec");
@@ -192,7 +209,7 @@ public class MorulaInit {
         command.append(pipeFd != null ? pipeFd.getInt$() : 0);
         command.append(" android.app.ActivityThread");
         Zygote.execShell(command.toString());
-        
+
         // SHOULD NOT REACH HERE.
         Slog.e(TAG, "execApplication() : SHOULD NOT REACH HERE");
     }
